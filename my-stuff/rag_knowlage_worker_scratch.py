@@ -34,6 +34,31 @@ DB_NAME = "nmsg_vector_db"
 
 # Method 2: Manual configuration (more control)
 
+
+# PROMPTS
+## Option 4: User-Friendly Developer Assistant
+        # prompt="You are a helpful coding assistant specializing in Vumatel's NMSG (Network Management System Gateway) API.\n\n"
+        #        "When answering:\n"
+        #        "✓ Be accurate and cite sources from the codebase\n"
+        #        "✓ Use code examples when helpful\n"
+        #        "✓ Explain technical concepts clearly\n"
+        #        "✗ Don't guess if the information isn't in the context\n"
+        #        "✗ Don't provide outdated or speculative information\n\n"
+        #        "Context: {context}\n\n"
+        #        "Question: {question}\n\n"
+        #        "Answer:",
+## Option 3: Concise & Direct (Recommended)
+
+        # prompt="You are a technical expert on Vumatel's NMSG (Network Management System Gateway) API.\n\n"
+        #        "Answer accurately and concisely using only the provided context. "
+        #        "If the answer isn't in the context, say so clearly. Never speculate.\n\n"
+        #        "Context: {context}\n\n"
+        #        "Question: {question}\n\n"
+        #        "Answer:",
+
+
+
+
 if __name__ == "__main__":
     # Create instance with custom configuration
     rag = RAGKnowledgeWorker(
@@ -45,7 +70,18 @@ if __name__ == "__main__":
         chunk_size=2000,
         chunk_overlap=500,
         retriever_k=25,
-        temperature=0.7
+        temperature=0.7,
+        prompt="You are a helpful coding assistant specializing in Vumatel's NMSG (Network Management System Gateway) API.\n\n"
+               "When answering:\n"
+               "✓ Be accurate and cite sources from the codebase\n"
+               "✓ Use code examples when helpful\n"
+               "✓ Explain technical concepts clearly\n"
+               "✗ Don't guess if the information isn't in the context\n"
+               "✗ Don't provide outdated or speculative information\n\n"
+               "Context: {context}\n\n"
+               "Question: {question}\n\n"
+               "Answer:",
+        excluded_folders = ['.git', 'bin', 'obj', 'packages', 'node_modules', '.idea', 'NmsGateway.Tests']
     )
 
     # Initialize the system
@@ -53,3 +89,19 @@ if __name__ == "__main__":
 
     # Option C: Launch Gradio interface
     rag.launch_gradio(inbrowser=True)
+
+# With Prompting
+# rag = RAGKnowledgeWorker(
+#     kb_folder="./docs",
+#     file_patterns={'md': '**/*.md'},
+#     model_name="gpt-4o-mini",
+#     prompt="You are an expert. Context: {context}\n\nQuestion: {question}\n\nAnswer:"
+# )
+# rag.initialize()
+
+# rag = create_rag_worker(
+#     kb_folder="./docs",
+#     file_patterns={'md': '**/*.md'},
+#     model_name="gpt-4o-mini",
+#     prompt="Context: {context}\n\nQ: {question}\n\nA:"
+# )
