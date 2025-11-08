@@ -127,11 +127,13 @@ class RAGKnowledgeWorker:
         retriever_k: int = 25,
         temperature: float = 0.7,
         text_loader_kwargs: Optional[Dict] = None,
-        ollama_base_url: str = 'http://localhost:11434/v1'
+        ollama_base_url: str = 'http://localhost:11434/v1',
+        prompt: Optional[str] = None,
+        excluded_folders: Optional[List[str]] = None
     ):
         """
         Initialize the RAG Knowledge Worker.
-        
+
         Args:
             kb_folder: Path to the knowledge base folder containing documents
             file_patterns: Dictionary mapping file types to glob patterns
@@ -146,11 +148,18 @@ class RAGKnowledgeWorker:
             text_loader_kwargs: Additional arguments for TextLoader
                                Example: {'encoding': 'utf-8', 'autodetect_encoding': True}
             ollama_base_url: Base URL for local Ollama API
-            
+            prompt: Optional custom prompt template string. If None, uses default RAG prompt.
+                    Should include {context} and {question} placeholders.
+                    Example: "Use this context: {context}\n\nQuestion: {question}\n\nAnswer:"
+            excluded_folders: Optional list of folder names to exclude from the knowledge base.
+                            Folders are matched by name (not full path).
+                            Example: ['.git', 'node_modules', 'build', 'dist']
+
         Note:
             - File patterns support recursive glob patterns (e.g., '**/*.py')
             - For Windows encoding issues, try text_loader_kwargs={'autodetect_encoding': True}
             - Lower temperature values produce more focused, deterministic responses
+            - Excluded folders apply to any subdirectory with that name under kb_folder
         """
         self.kb_folder = kb_folder
         self.file_patterns = file_patterns
@@ -162,9 +171,11 @@ class RAGKnowledgeWorker:
         self.retriever_k = retriever_k
         self.temperature = temperature
         self.ollama_base_url = ollama_base_url
-        
+        self.custom_prompt_str = prompt
+        self.excluded_folders = excluded_folders or []
+
         self.text_loader_kwargs = text_loader_kwargs or {'encoding': 'utf-8'}
-        
+
         # Components initialized later
         self.chunks: Optional[List[Document]] = None
         self.embeddings = None
@@ -173,7 +184,7 @@ class RAGKnowledgeWorker:
         self.retriever = None
         self.rag_chain = None
         self.prompt_template: Optional[ChatPromptTemplate] = None
-        
+
         load_dotenv(override=True)
         
     def create_llm(self) -> ChatOpenAI:
@@ -234,32 +245,35 @@ class RAGKnowledgeWorker:
     def load_knowledge_base(self) -> tuple:
         """
         Load documents from the knowledge base and create embeddings.
-        
+    
         Recursively loads all files matching the specified patterns from the
         knowledge base folder, splits them into chunks, and prepares embedding
-        function for vectorization.
-        
+        function for vectorization. Excludes any folders specified in excluded_folders.
+    
         Returns:
             tuple: (chunks, embeddings) where:
                 - chunks: List of Document objects split into manageable pieces
                 - embeddings: Embedding function (OpenAI or HuggingFace)
-                
+            
         Raises:
             Exception: Prints warning if specific file types fail to load
-            
+        
         Note:
             - Files are loaded recursively from all subdirectories
             - Each document is tagged with its file type in metadata
             - Failed file loads are non-fatal and print warnings
-            
+            - Folders in excluded_folders list are skipped during loading
+        
         Example:
             >> chunks, embeddings = rag.load_knowledge_base()
             >> print(f"Loaded {len(chunks)} chunks")
         """
         documents = []
-        
+    
         print(f"Loading files from {self.kb_folder} and all subdirectories...")
-        
+        if self.excluded_folders:
+            print(f"Excluding folders: {', '.join(self.excluded_folders)}")
+    
         for file_type, pattern in self.file_patterns.items():
             try:
                 loader = DirectoryLoader(
@@ -267,22 +281,23 @@ class RAGKnowledgeWorker:
                     glob=pattern,
                     loader_cls=TextLoader,
                     loader_kwargs=self.text_loader_kwargs,
-                    recursive=True
+                    recursive=True,
+                    exclude=self.excluded_folders
                 )
                 type_docs = loader.load()
                 documents.extend([self.add_metadata(doc, file_type) for doc in type_docs])
                 print(f"Loaded {len(type_docs)} {file_type} files")
             except Exception as e:
                 print(f"Warning: Error loading {file_type} files: {e}")
-        
+    
         print(f"Total documents loaded: {len(documents)}")
-        
+    
         text_splitter = CharacterTextSplitter(
             chunk_size=self.chunk_size,
             chunk_overlap=self.chunk_overlap
         )
         chunks = text_splitter.split_documents(documents)
-        
+    
         if self.use_openai_embeddings:
             print("Using OpenAI embeddings")
             embeddings = OpenAIEmbeddings()
@@ -293,7 +308,7 @@ class RAGKnowledgeWorker:
                 model_kwargs={'device': 'cpu'},
                 encode_kwargs={'normalize_embeddings': True}
             )
-        
+    
         return chunks, embeddings
     
     def create_vector_store(self, force_refresh: bool = False) -> Chroma:
@@ -349,17 +364,25 @@ class RAGKnowledgeWorker:
     def create_rag_prompt(self) -> ChatPromptTemplate:
         """
         Create the default RAG prompt template.
-        
+    
         Returns:
             ChatPromptTemplate: Template for RAG question answering with context
-            
+        
         Note:
-            The default prompt instructs the model to answer questions based only
+            If a custom prompt string was provided during initialization, it will be used.
+            Otherwise, the default prompt instructs the model to answer questions based only
             on the provided context. You can customize this by passing a different
             template to create_rag_chain().
-            
+        
         Example:
-            Custom prompt:
+            Custom prompt during initialization:
+           >> rag = RAGKnowledgeWorker(
+            ...     kb_folder="docs",
+            ...     file_patterns={'md': '**/*.md'},
+            ...     prompt="Context: {context}\n\nQ: {question}\n\nA:"
+            ... )
+            
+            Custom prompt at chain creation:
            >> custom_prompt = ChatPromptTemplate.from_template('''
             ... Answer in detail using this context: {context}
             ... Question: {question}
@@ -367,6 +390,9 @@ class RAGKnowledgeWorker:
             ... ''')
            >> rag.create_rag_chain(custom_prompt=custom_prompt)
         """
+        if self.custom_prompt_str:
+            return ChatPromptTemplate.from_template(self.custom_prompt_str)
+        
         return ChatPromptTemplate.from_template("""Answer the question based on the following context:
 
 Context: {context}
@@ -568,22 +594,27 @@ def create_rag_worker(
     kb_folder: str,
     file_patterns: Dict[str, str],
     model_name: str = "gpt-4o-mini",
+    prompt: Optional[str] = None,
     **kwargs
 ) -> RAGKnowledgeWorker:
     """
     Convenience function to create and initialize a RAG Knowledge Worker.
-    
+
     This is a shortcut that combines instantiation and initialization in one call.
-    
+
     Args:
         kb_folder: Path to the knowledge base folder
         file_patterns: Dictionary of file type patterns
         model_name: Name of the LLM model to use
+        prompt: Optional custom prompt template string. If None, uses default RAG prompt.
+                Should include {context} and {question} placeholders.
+                Example: "Use this context: {context}\n\nQuestion: {question}\n\nAnswer:"
         **kwargs: Additional configuration parameters passed to RAGKnowledgeWorker
-        
+                 Including excluded_folders: List[str] to exclude specific folders
+    
     Returns:
         RAGKnowledgeWorker: Fully initialized instance ready to use
-        
+    
     Example:
         Quick setup:
         >> rag = create_rag_worker(
@@ -593,7 +624,25 @@ def create_rag_worker(
         ...     retriever_k=20
         ... )
         >> answer = rag.query("How do I configure the system?")
-        
+    
+        With custom prompt:
+        >> rag = create_rag_worker(
+        ...     kb_folder="./code",
+        ...     file_patterns={'py': '**/*.py'},
+        ...     model_name="gpt-4o-mini",
+        ...     prompt="You are a code expert. Context: {context}\n\nQuestion: {question}\n\nDetailed Answer:"
+        ... )
+        >> answer = rag.query("Explain the main function")
+    
+        With excluded folders:
+        >> rag = create_rag_worker(
+        ...     kb_folder="./code",
+        ...     file_patterns={'py': '**/*.py'},
+        ...     model_name="gpt-4o-mini",
+        ...     excluded_folders=['.git', 'node_modules', '__pycache__', 'venv']
+        ... )
+        >> answer = rag.query("Explain the main function")
+
         With local Ollama:
         >> rag = create_rag_worker(
         ...     kb_folder="./code",
@@ -607,6 +656,7 @@ def create_rag_worker(
         kb_folder=kb_folder,
         file_patterns=file_patterns,
         model_name=model_name,
+        prompt=prompt,
         **kwargs
     )
     worker.initialize()
