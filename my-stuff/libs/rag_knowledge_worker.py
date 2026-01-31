@@ -552,6 +552,12 @@ Answer:""")
         
         interface = gr.ChatInterface(
             self.chat,
+            chatbot=gr.Chatbot(render_markdown=True,
+                               show_copy_button=True,
+                               show_share_button=True,
+                               height="100%",
+                               type='messages',
+                               resizable= True ),
             type="messages"
         )
         
